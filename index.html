@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OW-CLI</title>
+<style>
+  body {
+    margin: 0;
+    height: 100vh;
+    background: #000;
+    color: #fff;
+    font-family: monospace;
+    font-size: 16px;
+    line-height: 1.4;
+    padding: 10px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  #terminal {
+    height: 100%;
+    overflow-y: auto;
+  }
+  .line {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .prompt {
+    color: #fff;
+  }
+  input {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    outline: none;
+    width: 100%;
+    caret-color: #fff;
+  }
+  #cursor {
+    display: inline-block;
+    width: 10px;
+    height: 1.2em;
+    background: #fff;
+    animation: blink 1s step-end infinite;
+    vertical-align: middle;
+  }
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+  .success { color: #00ff99; }
+  .error { color: #ff4444; }
+  .note { color: #ffff00; }
+  .help-title { color: #00aaff; font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+
+<script>
+const terminal = document.getElementById('terminal');
+const sessionStart = Date.now();
+const USER = "shaptz";
+const HOST = "OWCLI";
+let fakeCurrentPath = "/home/shaptz";
+let history = [];
+let historyIndex = -1;
+
+const builtins = [
+  "help", "clear", "exit", "echo", "whoami",
+  "pwd", "uptime", "neofetch", "banner",
+  "compgen", "notpos", "raz"
+];
+
+const notPossible = [
+  "ls","cat","touch","rm","mkdir","rmdir",
+  "cp","mv","grep","awk","sed","vim","nano",
+  "ping","top","htop"
+];
+
+const OWCLI_LOGO = [
+"  _____        __",
+" / _ \\ \\      / /",
+"| | | \\ \\ /\\ / /",
+"| |_| |\\ V  V /",
+" \\___/ _\\_/\\_/__",
+" / ___| |   |_ _|",
+"| |   | |    | |",
+"| |___| |___ | |",
+" \\____|_____|___|"
+];
+
+const NF_COLORS = ["#ff5555","#50fa7b","#f1fa8c","#bd93f9","#ff79c6","#8be9fd","#ffb86c","#ffffff"];
+
+function formatUptime(ms){
+  const totalSeconds = Math.floor(ms/1000);
+  const hours = Math.floor(totalSeconds/3600);
+  const minutes = Math.floor((totalSeconds%3600)/60);
+  const seconds = totalSeconds%60;
+  return `${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`;
+}
+
+function print(text,className=''){
+  const line = document.createElement('div');
+  line.className = 'line '+className;
+  line.textContent = text;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function printBanner(){
+  OWCLI_LOGO.forEach(line=>print(line,'success'));
+}
+
+function printNeofetch(){
+  const info = [
+    ["OS","OWCLI OS"],
+    ["Host",HOST],
+    ["Kernel","web-virtual"],
+    ["Shell","bash (simulated)"],
+    ["User",USER],
+    ["Uptime",formatUptime(Date.now()-sessionStart)]
+  ];
+
+  const maxLogoLen = Math.max(...OWCLI_LOGO.map(l=>l.length));
+  for(let i=0;i<OWCLI_LOGO.length;i++){
+    const logoLine = OWCLI_LOGO[i].padEnd(maxLogoLen," ");
+    const infoText = info[i]?info[i][0].padEnd(8," ")+": "+info[i][1]:"";
+    const lineDiv = document.createElement('div');
+    lineDiv.className='line';
+    lineDiv.innerHTML = `<span style="color:#ff79c6">${logoLine}</span> <span style="color:#f1fa8c">${infoText}</span>`;
+    terminal.appendChild(lineDiv);
+  }
+
+  const paletteDiv = document.createElement('div');
+  paletteDiv.className='line';
+  paletteDiv.textContent = 'Color Palette:';
+  terminal.appendChild(paletteDiv);
+
+  const spanLine = document.createElement('div');
+  NF_COLORS.forEach(c=>{
+    const span = document.createElement('span');
+    span.textContent = '█';
+    span.style.color = c;
+    spanLine.appendChild(span);
+  });
+  terminal.appendChild(spanLine);
+}
+
+function clearScreen(){ terminal.innerHTML=''; }
+
+function newPrompt(){
+  const promptLine = document.createElement('div');
+  promptLine.className='line prompt';
+  promptLine.textContent = `${USER}@${HOST}:${fakeCurrentPath}$ `;
+  
+  const input = document.createElement('input');
+  input.type='text';
+  input.autofocus=true;
+  input.spellcheck=false;
+  promptLine.appendChild(input);
+
+  const cursor = document.createElement('span');
+  cursor.id='cursor';
+  promptLine.appendChild(cursor);
+  terminal.appendChild(promptLine);
+  terminal.scrollTop = terminal.scrollHeight;
+  input.focus();
+
+  input.addEventListener('keydown',function(e){
+    if(e.key==='Enter'){
+      e.preventDefault();
+      const cmdFull = input.value.trim();
+      history.push(cmdFull);
+      historyIndex = history.length;
+      promptLine.removeChild(input);
+      promptLine.removeChild(cursor);
+      promptLine.textContent += cmdFull;
+      handleCommand(cmdFull);
+    } else if(e.key==='ArrowUp'){
+      historyIndex = Math.max(0,historyIndex-1);
+      input.value = history[historyIndex] || '';
+    } else if(e.key==='ArrowDown'){
+      historyIndex = Math.min(history.length,historyIndex+1);
+      input.value = history[historyIndex] || '';
+    }
+  });
+}
+
+function handleCommand(cmdFull){
+  const parts = cmdFull.split(/\s+/);
+  const cmd = parts[0];
+  const args = parts.slice(1);
+
+  if(cmd==='help'){
+    print('Available commands:','help-title');
+    builtins.forEach(c=>print('  '+c));
+  }
+  else if(cmd==='clear'){
+    clearScreen();
+  }
+  else if(cmd==='exit'){
+    print('Exiting... basesite! cant exit:','success');
+  }
+  else if(cmd==='echo'){
+    print(args.join(' '));
+  }
+  else if(cmd==='whoami'){
+    print(USER);
+  }
+  else if(cmd==='pwd'){
+    print(fakeCurrentPath);
+  }
+  else if(cmd==='uptime'){
+    print(formatUptime(Date.now()-sessionStart));
+  }
+  else if(cmd==='banner'){
+    printBanner();
+  }
+  else if(cmd==='neofetch'){
+    printNeofetch();
+  }
+  else if(cmd==='compgen'){
+    const allCmds = [...builtins,...notPossible];
+    if(args[0]==='-c'){
+      allCmds.forEach(c=>print(c));
+    } else {
+      print('Usage: compgen -c','note');
+    }
+  }
+  else if(cmd==='notpos'){
+    print('Commands not possible in browser:','help-title');
+    notPossible.forEach(c=>print(c));
+  }
+
+  /* 🔥 NEW COMMAND */
+  else if(cmd==='raz'){
+    const url = args[0];
+    if(!url){
+      print('Usage: raz https://example.com','error');
+    } else if(!url.startsWith('http://') && !url.startsWith('https://')){
+      print('URL must start with http:// or https://','error');
+    } else {
+      print(`Opening ${url} ...`,'success');
+      const win = window.open('about:blank','_blank');
+      if(win){
+        win.document.write(`
+<!DOCTYPE html>
+<html>
+<head>
+<title>raz</title>
+<style>
+body{margin:0;height:100vh;background:#000;overflow:hidden;}
+iframe{border:none;width:100%;height:100%;}
+</style>
+</head>
+<body>
+<iframe src="${url}" allowfullscreen></iframe>
+</body>
+</html>
+        `);
+        win.document.close();
+      } else {
+        print('Popup blocked! Allow popups.','error');
+      }
+    }
+  }
+
+  else if(cmd===''){
+    // empty
+  }
+  else {
+    print(`Command not recognized. Type "help" for commands.`,'error');
+  }
+
+  setTimeout(newPrompt, 100);
+}
+
+print('OW-CLI: “compgen -c” for commands list','note');
+newPrompt();
+</script>
+</body>
+</html>
